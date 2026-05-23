@@ -7,7 +7,7 @@ const today=()=>new Date().toLocaleDateString("he-IL");
 
 // ══ GEMINI API ══
 // הכנס כאן את ה-API Key שלך מ-Google AI Studio
-const GEMINI_API_KEY = "AIzaSyD5YxEOSTMRCpbOzfEMFDDsvD_1GBcW6iM";
+const GEMINI_API_KEY = "AIzaSyBHWowATlgKnMxeNieur3CLzlCPFIVTXDA";
 
 async function askGemini(prompt) {
   const res = await fetch(
