@@ -5,67 +5,6 @@ const DEFAULT_CATS=[{id:"work",label:"עבודה / קריירה",emoji:"💼",co
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2);
 const today=()=>new Date().toLocaleDateString("he-IL");
 
-// ══ GEMINI API ══
-// הכנס כאן את ה-API Key שלך מ-Google AI Studio
-const GEMINI_API_KEY = "AIzaSyBHWowATlgKnMxeNieur3CLzlCPFIVTXDA";
-
-async function askGemini(prompt) {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: "POST",
-      headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({
-        contents: [{parts: [{text: prompt}]}],
-        generationConfig: {temperature: 0.8, maxOutputTokens: 1000}
-      })
-    }
-  );
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message);
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || "לא התקבלה תשובה";
-}
-
-function buildCoachPrompt(goal, notes, type, timeframe) {
-  const notesList = notes.length
-    ? notes.map((n,i) => `${i+1}. ${n.done?"[הושלם]":""} ${n.text}`).join("\n")
-    : "אין הערות עדיין";
-  const done = notes.filter(n=>n.done).length;
-  const total = notes.length;
-
-  const base = `אתה מאמן אישי (קואץ') מקצועי ומומחה להגשמת מטרות. 
-הלקוח שלך הגדיר מטרה ואתה צריך לעזור לו להגשים אותה בצורה פרקטית ומעשית.
-דבר בעברית ישירה, חמה, ומעשית. אל תהיה כללי - תהיה ספציפי למטרה הזו.
-אל תתחיל עם "בהחלט!" או "כמובן!" - תתחיל ישר עם התוכן.
-
-מטרת הלקוח: ${goal}
-התקדמות: ${done} מתוך ${total} משימות הושלמו
-הערות קיימות:
-${notesList}`;
-
-  if (type === "tip") {
-    return base + `\n\nתן טיפ יומי אחד קצר וספציפי (3-4 משפטים) שהלקוח יכול לעשות עוד היום להתקדמות במטרה הזו. תהיה קונקרטי - מה בדיוק לעשות, מתי, ואיך.`;
-  }
-  if (type === "plan") {
-    return base + `\n\nצור תוכנית עבודה מפורטת ל-${timeframe} להשגת המטרה. 
-חלק לשלבים שבועיים ברורים.
-לכל שלב: כותרת + 2-3 משימות קונקרטיות.
-בסוף: טיפ אחד למניעת כישלון.
-פורמט:
-📅 שבוע 1: [כותרת]
-• משימה 1
-• משימה 2
-וכן הלאה.`;
-  }
-  if (type === "question") {
-    return base + `\n\nשאל שאלה אחת עמוקה שתעזור ללקוח לחשוב טוב יותר על המטרה שלו. שאלה שתחשוף חסמים או תפתח פרספקטיבה חדשה. רק השאלה, בלי הסבר.`;
-  }
-  if (type === "morning") {
-    return base + `\n\nכתוב הודעת בוקר קצרה ומעוררת (3-4 משפטים) לאדם שעובד על המטרה הזו. משהו שיתן לו מוטיבציה לפעול היום. ספציפי למטרה שלו.`;
-  }
-  return base;
-}
-
 // ══ THEMES ══
 const THEMES={
   purple:{name:"סגול",bg:"linear-gradient(160deg,#0f0c29,#302b63,#24243e)",accent:"#9B6FE8"},
@@ -97,11 +36,9 @@ let S={
   theme:load("theme","purple"),
   fontSize:load("fontSize","medium"),
   compactMode:load("compactMode",false),
-  aiEnabled:load("aiEnabled",false),
-  morningCardEnabled:load("morningCardEnabled",false),
-  morningCardDismissedDate:load("morningCardDismissedDate",""),
-  primarySection:load("primarySection","home"),
-  navPosition:load("navPosition","bottom"),
+  // הגדרות תצוגה ראשית
+  primarySection:load("primarySection","home"), // home / notepad / torah / goals
+  navPosition:load("navPosition","bottom"), // bottom / top
   visibleSections:load("visibleSections",["notepad","torah","goals-grid"]),
   // UI state
   view:"home",activeCat:null,activeGoalId:null,activeFolderId:"default",
@@ -116,10 +53,6 @@ let S={
   addingBook:false,bookForm:{name:"",chapter:"",page:"",lastText:""},editBookId:null,
   pendingPhotoBookId:null,viewingImg:null,
   showSettings:false,
-  // AI state
-  aiLoading:false,aiResult:null,aiResultType:null,aiGoalId:null,
-  showPlanModal:false,planTimeframe:"30 יום",
-  showMorningCard:false,morningCardText:null,
 };
 
 function setState(patch){Object.assign(S,patch);persist();render();}
@@ -131,8 +64,6 @@ function persist(){
   save("bookImages",S.bookImages);save("homeOrder",S.homeOrder);save("appTitle",S.appTitle);
   save("torahSectionTitle",S.torahSectionTitle);
   save("theme",S.theme);save("fontSize",S.fontSize);save("compactMode",S.compactMode);
-  save("aiEnabled",S.aiEnabled);save("morningCardEnabled",S.morningCardEnabled);
-  save("morningCardDismissedDate",S.morningCardDismissedDate);
   save("primarySection",S.primarySection);save("navPosition",S.navPosition);
   save("visibleSections",S.visibleSections);
 }
@@ -145,84 +76,12 @@ function applyTheme(){
   document.body.style.fontSize=sizes[S.fontSize]||"15px";
 }
 
-// ══ AI ACTIONS ══
-async function aiGetTip(goalId) {
-  if(!S.aiEnabled){alert("יועץ ה-AI כבוי. הפעל אותו בהגדרות.");return;}
-  if(GEMINI_API_KEY==="YOUR_API_KEY_HERE"){alert("צריך להכניס API Key בקובץ script.js");return;}
-  const goal = S.data[S.activeCat]?.goals.find(g=>g.id===goalId);
-  if(!goal)return;
-  setState({aiLoading:true,aiResult:null,aiResultType:"tip",aiGoalId:goalId});
-  try{
-    const text = await askGemini(buildCoachPrompt(goal.title, goal.notes, "tip"));
-    setState({aiLoading:false,aiResult:text});
-  }catch(e){
-    setState({aiLoading:false,aiResult:"שגיאה: "+e.message});
-  }
-}
-
-async function aiGetQuestion(goalId) {
-  if(!S.aiEnabled){alert("יועץ ה-AI כבוי. הפעל אותו בהגדרות.");return;}
-  if(GEMINI_API_KEY==="YOUR_API_KEY_HERE"){alert("צריך להכניס API Key בקובץ script.js");return;}
-  const goal = S.data[S.activeCat]?.goals.find(g=>g.id===goalId);
-  if(!goal)return;
-  setState({aiLoading:true,aiResult:null,aiResultType:"question",aiGoalId:goalId});
-  try{
-    const text = await askGemini(buildCoachPrompt(goal.title, goal.notes, "question"));
-    setState({aiLoading:false,aiResult:text});
-  }catch(e){
-    setState({aiLoading:false,aiResult:"שגיאה: "+e.message});
-  }
-}
-
-async function aiGetPlan(goalId, timeframe) {
-  if(!S.aiEnabled){alert("יועץ ה-AI כבוי. הפעל אותו בהגדרות.");return;}
-  if(GEMINI_API_KEY==="YOUR_API_KEY_HERE"){alert("צריך להכניס API Key בקובץ script.js");return;}
-  const goal = S.data[S.activeCat]?.goals.find(g=>g.id===goalId);
-  if(!goal)return;
-  setState({aiLoading:true,aiResult:null,aiResultType:"plan",aiGoalId:goalId,showPlanModal:false});
-  try{
-    const text = await askGemini(buildCoachPrompt(goal.title, goal.notes, "plan", timeframe));
-    setState({aiLoading:false,aiResult:text});
-  }catch(e){
-    setState({aiLoading:false,aiResult:"שגיאה: "+e.message});
-  }
-}
-
-async function aiMorningCard() {
-  if(GEMINI_API_KEY==="YOUR_API_KEY_HERE")return;
-  // אסוף את כל המטרות הפעילות
-  const allGoals = [];
-  S.cats.forEach(c=>{
-    const gs = S.data[c.id]?.goals||[];
-    gs.forEach(g=>allGoals.push(g));
-  });
-  if(!allGoals.length)return;
-  // בחר מטרה אקראית
-  const goal = allGoals[Math.floor(Math.random()*allGoals.length)];
-  try{
-    const text = await askGemini(buildCoachPrompt(goal.title, goal.notes, "morning"));
-    setState({showMorningCard:true,morningCardText:text});
-  }catch(e){
-    console.log("Morning card error:", e);
-  }
-}
-
-function dismissMorningCard(){
-  setState({showMorningCard:false,morningCardDismissedDate:today()});
-}
-
-function saveAiResultAsNote(){
-  if(!S.aiResult||!S.aiGoalId||!S.activeCat)return;
-  const goal = S.data[S.activeCat]?.goals.find(g=>g.id===S.aiGoalId);
-  if(!goal)return;
-  goal.notes.push({id:uid(),text:"🤖 "+S.aiResult,done:false});
-  setState({aiResult:null});
-  alert("נשמר כהערה במטרה!");
-}
-
 // ══ HELPERS ══
+
+// עברית תקינה בהורדת קבצים
 function downloadTXT(content,filename){
   const bom="\uFEFF";
+  // הוסף dir=rtl לקובץ טקסט
   const rtlMark="\u202B";
   const blob=new Blob([bom+rtlMark+content],{type:"text/plain;charset=utf-8"});
   const url=URL.createObjectURL(blob);
@@ -245,11 +104,15 @@ function compressImage(dataUrl,callback){
   img.src=dataUrl;
 }
 
+// שיתוף - תוקן לעבוד גם ב-PWA
 function shareWA(text){
-  window.open("https://wa.me/?text="+encodeURIComponent(text),"_blank","noopener");
+  const url="https://wa.me/?text="+encodeURIComponent(text);
+  window.open(url,"_blank","noopener");
 }
 function shareEmail(subject,body){
-  window.location.href="mailto:?subject="+encodeURIComponent(subject)+"&body="+encodeURIComponent(body);
+  const url="mailto:?subject="+encodeURIComponent(subject)+"&body="+encodeURIComponent(body);
+  // PWA fix: location.href עדיף על window.open עבור mailto
+  window.location.href=url;
 }
 
 function exportGoalsTXT(){
@@ -286,12 +149,11 @@ function exportNpTXT(){
 // ══ גיבוי ושחזור ══
 function createBackup(){
   const backup={
-    version:4,date:today(),appTitle:S.appTitle,torahSectionTitle:S.torahSectionTitle,
+    version:3,date:today(),appTitle:S.appTitle,torahSectionTitle:S.torahSectionTitle,
     cats:S.cats,catsTrash:S.catsTrash,data:S.data,goalsTrash:S.goalsTrash,
     torahBooks:S.torahBooks,torahTrash:S.torahTrash,npFolders:S.npFolders,
     npNotes:S.npNotes,npTrash:S.npTrash,bookImages:S.bookImages,homeOrder:S.homeOrder,
     theme:S.theme,fontSize:S.fontSize,compactMode:S.compactMode,
-    aiEnabled:S.aiEnabled,morningCardEnabled:S.morningCardEnabled,
     primarySection:S.primarySection,navPosition:S.navPosition,visibleSections:S.visibleSections,
   };
   const blob=new Blob([JSON.stringify(backup,null,2)],{type:"application/json;charset=utf-8"});
@@ -316,8 +178,6 @@ function restoreFromBackup(json){
     S.torahSectionTitle=b.torahSectionTitle||"התקדמות בלימוד התורה";
     if(b.theme)S.theme=b.theme;if(b.fontSize)S.fontSize=b.fontSize;
     if(b.compactMode!==undefined)S.compactMode=b.compactMode;
-    if(b.aiEnabled!==undefined)S.aiEnabled=b.aiEnabled;
-    if(b.morningCardEnabled!==undefined)S.morningCardEnabled=b.morningCardEnabled;
     if(b.primarySection)S.primarySection=b.primarySection;
     if(b.navPosition)S.navPosition=b.navPosition;
     if(b.visibleSections)S.visibleSections=b.visibleSections;
@@ -352,15 +212,16 @@ function resetForms(){
   Object.assign(S,{addingGoal:false,editGoalId:null,addingNote:false,addingBook:false,
     showCatForm:false,editCatId:null,addingNpNote:false,addingFolder:false,editNpNoteId:null,
     folderMenuOpen:false,npMenuOpen:false,showSearch:false,searchQuery:"",shareNoteId:null,
-    moveNoteId:null,reorderMode:false,editingTorahTitle:false,fullNoteEditing:false,
-    aiResult:null,aiLoading:false,showPlanModal:false});
+    moveNoteId:null,reorderMode:false,editingTorahTitle:false,fullNoteEditing:false});
 }
 
+// כפתור אחורה פיזי של אנדרואיד
 window.addEventListener("popstate",()=>{
   if(S.fullNote){setState({fullNote:null,fullNoteEditing:false});history.pushState(null,"","");return;}
   if(S.showSettings){setState({showSettings:false});history.pushState(null,"","");return;}
   if(S.view!=="home"){goBack();history.pushState(null,"","");}
 });
+// דחוף state ריק כדי שיהיה לאן לחזור
 history.pushState(null,"","");
 
 function goBack(){
@@ -422,45 +283,14 @@ function tag(text,color){return `<span class="tag" style="background:${color}30;
 function inp(id,placeholder,val="",type="text",extra=""){return `<input id="${id}" class="inp" type="${type}" placeholder="${placeholder}" value="${val}" ${extra}/>`;}
 function textarea(id,placeholder,val="",rows=4){const safe=(val||"").replace(/</g,"&lt;").replace(/>/g,"&gt;");return `<textarea id="${id}" class="inp" rows="${rows}" placeholder="${placeholder}">${safe}</textarea>`;}
 
+function addBtn(onclick,color,label="+ הוסף"){
+  return `<button class="dashed-btn" onclick="${onclick}" style="background:${color}18;border-color:${color}55;color:${color}">${label}</button>`;
+}
+
 function trashSection(items,emptyFn,renderItem){
   if(!items.length)return`<div class="empty-state"><div class="icon">🗑</div>סל ריק</div>`;
   let h=`<div class="row" style="margin-bottom:12px"><span style="font-size:12px;color:rgba(255,255,255,0.4)">${items.length} פריטים</span><button class="ib" onclick="${emptyFn}" style="background:rgba(255,80,80,0.2);color:#ff9090;font-size:12px">רוקן סל 🗑</button></div>`;
   [...items].reverse().forEach(it=>{h+=renderItem(it);});
-  return h;
-}
-
-// ══ AI PANEL - מוצג בתוך דף המטרה ══
-function buildAiPanel(goalId){
-  if(!S.aiEnabled)return"";
-  const accent=THEMES[S.theme]?.accent||"#9B6FE8";
-  let h=`<div style="background:rgba(155,111,232,0.08);border:1px solid rgba(155,111,232,0.25);border-radius:14px;padding:12px;margin-bottom:12px">
-    <div style="font-size:12px;color:rgba(155,111,232,0.8);margin-bottom:10px;font-weight:700">🤖 יועץ AI</div>
-    <div style="display:flex;gap:7px;flex-wrap:wrap">
-      ${btn("💡 טיפ יומי",`aiGetTip('${goalId}')`, "rgba(155,111,232,0.3)")}
-      ${btn("❓ שאלת קואצ'ינג",`aiGetQuestion('${goalId}')`, "rgba(93,168,232,0.3)")}
-      ${btn("📋 צור תוכנית",`setState({showPlanModal:true,aiGoalId:'${goalId}'})`, "rgba(76,175,125,0.3)")}
-    </div>`;
-
-  if(S.aiLoading&&S.aiGoalId===goalId){
-    h+=`<div style="margin-top:12px;text-align:center;color:rgba(255,255,255,0.5);font-size:13px">
-      <div style="display:inline-block;animation:spin 1s linear infinite;font-size:20px">⏳</div>
-      <div style="margin-top:6px">המאמן חושב...</div>
-    </div>`;
-  }
-
-  if(S.aiResult&&S.aiGoalId===goalId&&!S.aiLoading){
-    const typeLabel=S.aiResultType==="tip"?"💡 טיפ":S.aiResultType==="question"?"❓ שאלה":"📋 תוכנית";
-    h+=`<div style="margin-top:12px;background:rgba(255,255,255,0.06);border-radius:10px;padding:12px">
-      <div style="font-size:11px;color:rgba(255,255,255,0.4);margin-bottom:8px">${typeLabel} מהמאמן:</div>
-      <div style="font-size:14px;line-height:1.7;white-space:pre-wrap;color:#fff">${S.aiResult.replace(/</g,"&lt;")}</div>
-      <div style="display:flex;gap:7px;margin-top:10px">
-        ${btn("💾 שמור כהערה","saveAiResultAsNote()","rgba(76,175,125,0.3)")}
-        ${btn("✕ סגור","setState({aiResult:null})","rgba(255,255,255,0.1)")}
-      </div>
-    </div>`;
-  }
-
-  h+=`</div>`;
   return h;
 }
 
@@ -476,7 +306,7 @@ function buildHeader(){
     const map={
       home:`🗂 ${S.appTitle}`,"manage-cats":"⚙️ קטגוריות","cat-trash":"🗑 סל קטגוריות",
       goals:`${cur?.emoji||""} ${cur?.label||""}`,"goal-detail":`📝 ${curGoal?.title||""}`,
-      "goals-trash":" גין סל מטרות","torah-progress":S.torahSectionTitle,
+      "goals-trash":"🗑 סל מטרות","torah-progress":S.torahSectionTitle,
       "torah-trash":"🗑 סל ספרים",notepad:`📁 ${curFolder?.name||"כללי"}`,"np-trash":"🗑 סל פתקים",
     };
     title=map[S.view]||"";
@@ -521,6 +351,7 @@ function buildHeader(){
       actions+=hb("⋯","toggleNpMenu()",S.npMenuOpen?"color:#9B6FE8":"");
     }
   }
+  // כפתורי עריכה ושיתוף בצפייה מלאה
   if(S.fullNote){
     const isNp=S.fullNote.type==="np";
     const n=isNp?S.npNotes.find(x=>x.id===S.fullNote.id):S.data[S.activeCat]?.goals.find(g=>g.id===S.activeGoalId)?.notes.find(x=>x.id===S.fullNote.id);
@@ -562,6 +393,7 @@ function toggleSearch(){setState({showSearch:!S.showSearch,searchQuery:""});}
 function toggleFolderMenu(){setState({folderMenuOpen:!S.folderMenuOpen,npMenuOpen:false});}
 function toggleNpMenu(){setState({npMenuOpen:!S.npMenuOpen,folderMenuOpen:false});}
 
+// שמירת עריכה במסך מלא
 function saveFullNoteEdit(){
   const v=document.getElementById("fullNoteEditTA")?.value||"";
   if(!v.trim())return;
@@ -599,6 +431,7 @@ function buildSettings(){
     </div>
   </div>`;
 
+  // תצוגה ראשית
   h+=`<div class="settings-section">
     <h4>📱 מה מוצג באפליקציה</h4>
     <div style="font-size:12px;color:rgba(255,255,255,0.45);margin-bottom:10px">בחר אילו חלקים יופיעו</div>`;
@@ -611,27 +444,7 @@ function buildSettings(){
   });
   h+=`</div>`;
 
-  // הגדרות AI
-  h+=`<div class="settings-section">
-    <h4>🤖 יועץ AI</h4>
-    <div style="font-size:12px;color:rgba(255,255,255,0.45);margin-bottom:10px">מאמן אישי שעוזר להגשים את המטרות שלך</div>
-    <div class="toggle-row">
-      <div>
-        <div style="font-size:14px;font-weight:600">הפעל יועץ AI</div>
-        <div style="font-size:11px;color:rgba(255,255,255,0.45);margin-top:2px">יופיע בכל דף מטרה</div>
-      </div>
-      <button class="toggle" onclick="setState({aiEnabled:!S.aiEnabled})" style="background:${S.aiEnabled?accent:"rgba(255,255,255,0.15)"}"><span style="position:absolute;width:20px;height:20px;border-radius:50%;background:#fff;top:2px;left:${S.aiEnabled?"22px":"2px"};transition:left 0.2s;display:block"></span></button>
-    </div>
-    <div class="toggle-row">
-      <div>
-        <div style="font-size:14px;font-weight:600">כרטיס בוקר</div>
-        <div style="font-size:11px;color:rgba(255,255,255,0.45);margin-top:2px">טיפ יומי בכניסה לאפליקציה</div>
-      </div>
-      <button class="toggle" onclick="setState({morningCardEnabled:!S.morningCardEnabled})" style="background:${S.morningCardEnabled?accent:"rgba(255,255,255,0.15)"}"><span style="position:absolute;width:20px;height:20px;border-radius:50%;background:#fff;top:2px;left:${S.morningCardEnabled?"22px":"2px"};transition:left 0.2s;display:block"></span></button>
-    </div>
-    ${GEMINI_API_KEY==="YOUR_API_KEY_HERE"?`<div style="background:rgba(255,80,80,0.1);border:1px solid rgba(255,80,80,0.3);border-radius:10px;padding:10px;font-size:12px;color:#ff9090;margin-top:8px">⚠️ צריך להכניס API Key בקובץ script.js כדי שה-AI יעבוד</div>`:`<div style="background:rgba(76,175,125,0.1);border:1px solid rgba(76,175,125,0.3);border-radius:10px;padding:10px;font-size:12px;color:#4CAF7D;margin-top:8px">✅ API Key מוגדר</div>`}
-  </div>`;
-
+  // מצב קומפקטי
   h+=`<div class="settings-section">
     <h4>📐 נראות</h4>
     <div class="toggle-row">
@@ -756,6 +569,7 @@ function buildGoals(){
   const cat=S.cats.find(c=>c.id===S.activeCat);if(!cat)return"";
   const goals=S.data[S.activeCat]?.goals||[];
   let h="";
+  // כפתור הוספה בראש
   if(!S.addingGoal)h+=`<button class="dashed-btn" onclick="setState({addingGoal:true})" style="background:${cat.color}18;border-color:${cat.color}55;color:${cat.color};margin-bottom:10px">+ הוסף מטרה</button>`;
   if(!goals.length&&!S.addingGoal)h+=`<div class="empty-state"><div class="icon">🌟</div>הוסף מטרה ראשונה!</div>`;
   if(S.addingGoal){
@@ -765,7 +579,7 @@ function buildGoals(){
     if(S.editGoalId===g.id){
       h+=`<div class="card" style="border:1px solid ${cat.color}66">${inp("editGoalInp","שם המטרה...",g.title.replace(/"/g,'&quot;'),"text","style='margin-bottom:8px'")}<div style="display:flex;gap:8px">${btn("שמור ✓","saveGoalFromForm()",cat.color,"flex")}${btn("ביטול","setState({editGoalId:null})")}</div></div>`;
     }else{
-      h+=`<div class="card" style="border:1px solid ${cat.color}33;display:flex;align-items:center;gap:9px;cursor:pointer" onclick="setState({view:'goal-detail',activeGoalId:'${g.id}',aiResult:null})">
+      h+=`<div class="card" style="border:1px solid ${cat.color}33;display:flex;align-items:center;gap:9px;cursor:pointer" onclick="setState({view:'goal-detail',activeGoalId:'${g.id}'})">
         <span style="background:${cat.color};color:#fff;border-radius:8px;width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0">${i+1}</span>
         <div style="flex:1"><div style="font-weight:600;font-size:14px">${g.title}</div><div style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:2px">${g.notes.length} הערות</div></div>
         <span style="font-size:16px;opacity:0.4">›</span>
@@ -784,10 +598,7 @@ function buildGoalDetail(){
   const goal=S.data[S.activeCat]?.goals.find(g=>g.id===S.activeGoalId);
   if(!cat||!goal)return"";
   let h="";
-
-  // פאנל AI בראש
-  h+=buildAiPanel(goal.id);
-
+  // כפתור הוספה בראש
   if(!S.addingNote)h+=`<button class="dashed-btn" onclick="setState({addingNote:true})" style="background:${cat.color}18;border-color:${cat.color}55;color:${cat.color};margin-bottom:10px">+ הוסף הערה</button>`;
   if(S.addingNote){
     h+=`<div class="card" style="margin-bottom:10px"><div style="font-size:11px;color:rgba(255,255,255,0.35);margin-bottom:6px">💡 ==טקסט== = הדגשה צהובה</div>${textarea("newNoteTA","כתוב הערה...",S.newNote,3)}<div style="display:flex;gap:8px;margin-top:8px">${btn("הוסף ✓","addNoteFromForm()",cat.color,"flex")}${btn("ביטול","setState({addingNote:false})")}</div></div>`;
@@ -803,6 +614,7 @@ function buildGoalDetail(){
           <div style="text-decoration:${n.done?"line-through":"none"};margin-top:4px">${richHTML(n.text,exp===0?"clamp1":exp===1?"clamp4":"")}</div>
           ${exp===0&&n.text.length>50?`<span style="font-size:11px;color:rgba(255,255,255,0.35)">לחץ להרחבה…</span>`:""}
           ${exp===1?`<span style="font-size:11px;color:rgba(93,168,232,0.5)">לחץ שוב לכיווץ ↑</span>`:""}
+          ${exp===2?`<span style="font-size:11px;color:rgba(155,111,232,0.6)">לחץ לכיווץ ↑</span>`:""}
         </div>
         ${ib("⤢",`setState({fullNote:{type:'goal',id:'${n.id}'}})`, "rgba(255,255,255,0.07)")}
         ${ib("🗑",`deleteGoalNote('${n.id}')`, "rgba(255,80,80,0.15)")}
@@ -811,7 +623,12 @@ function buildGoalDetail(){
   });
   return h;
 }
-function cycleNoteExp(id){const cur=S.noteExp[id]||0;S.noteExp={...S.noteExp,[id]:(cur+1)%3};setState({});}
+// מחזורי: 0=שורה אחת, 1=4 שורות, 2=מלא, 0=שורה אחת...
+function cycleNoteExp(id){
+  const cur=S.noteExp[id]||0;
+  S.noteExp={...S.noteExp,[id]:(cur+1)%3};
+  setState({});
+}
 function addNoteFromForm(){S.newNote=document.getElementById("newNoteTA")?.value||"";addGoalNote();}
 
 function buildGoalsTrash(){
@@ -829,6 +646,7 @@ function buildGoalsTrash(){
 
 function buildTorah(){
   let h="";
+  // כפתור הוספה בראש
   if(!S.addingBook)h+=`<button class="dashed-btn" onclick="setState({addingBook:true})" style="background:#4CAF7D18;border-color:#4CAF7D55;color:#4CAF7D;margin-bottom:10px">+ הוסף ספר</button>`;
   if(S.addingBook){
     h+=`<div class="card" style="border:1px solid rgba(76,175,125,0.4);margin-bottom:10px">
@@ -842,8 +660,9 @@ function buildTorah(){
   }
   if(!S.torahBooks.length&&!S.addingBook)h+=`<div class="empty-state"><div class="icon">📖</div>הוסף ספר ראשון!</div>`;
   S.torahBooks.forEach((b,i)=>{
-    if(S.editBookId===b.id&&S.addingBook)return;
     const hasImg=!!S.bookImages[b.id];
+    const isEditing=S.editBookId===b.id&&S.addingBook;
+    if(isEditing)return; // הטופס כבר הוצג למעלה
     h+=`<div class="card" style="border:1px solid rgba(76,175,125,0.3)">
       <div class="row" style="margin-bottom:8px">
         <div style="font-weight:700;font-size:15px">${i+1}. ${b.name}</div>
@@ -857,7 +676,8 @@ function buildTorah(){
         </div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        ${b.chapter?tag("פרק "+b.chapter,"#4CAF7D"):""}${b.page?tag("עמוד "+b.page,"#5DA8E8"):""}
+        ${b.chapter?tag("פרק "+b.chapter,"#4CAF7D"):""}
+        ${b.page?tag("עמוד "+b.page,"#5DA8E8"):""}
       </div>
       ${b.lastText?`<div style="margin-top:8px;font-size:12px;color:rgba(255,255,255,0.5);border-top:1px solid rgba(255,255,255,0.08);padding-top:8px">עצרתי ב: <em>"${b.lastText}"</em></div>`:""}
       ${hasImg?`<img src="${S.bookImages[b.id]}" onclick="setViewingImg('${b.id}')" style="margin-top:10px;width:100%;max-height:130px;object-fit:cover;border-radius:10px;cursor:pointer" alt="page"/>`:""}
@@ -885,7 +705,8 @@ function buildTorahTrash(){
 }
 
 function buildFolderMenu(){
-  let h=`<div class="slide-menu"><div class="row" style="margin-bottom:8px"><span style="font-size:12px;color:rgba(255,255,255,0.4)">תיקיות</span></div>`;
+  let h=`<div class="slide-menu">
+    <div class="row" style="margin-bottom:8px"><span style="font-size:12px;color:rgba(255,255,255,0.4)">תיקיות</span></div>`;
   S.npFolders.forEach((f,idx)=>{
     const cnt=S.npNotes.filter(n=>n.folderId===f.id).length;
     const isActive=f.id===S.activeFolderId;
@@ -937,6 +758,7 @@ function exportCurrentFolder(){const f=S.npFolders.find(x=>x.id===S.activeFolder
 function buildNotepad(){
   let h=`<div class="tabs">${S.npFolders.map(f=>`<button class="tab ${f.id===S.activeFolderId?"active":""}" onclick="setState({activeFolderId:'${f.id}',searchQuery:''})">${f.name} <span style="opacity:0.6">(${S.npNotes.filter(n=>n.folderId===f.id).length})</span></button>`).join("")}</div>`;
   const notes=getFolderNotes();
+  // כפתור הוספה בראש
   if(!S.addingNpNote&&!S.searchQuery){
     h+=`<button class="dashed-btn" onclick="setState({addingNpNote:true})" style="background:#5DA8E818;border-color:#5DA8E855;color:#5DA8E8;margin-bottom:10px">+ פתק חדש</button>`;
   }
@@ -966,13 +788,19 @@ function buildNotepad(){
           ${richHTML(n.text,exp===0?"clamp1":exp===1?"clamp4":"")}
           ${exp===0&&(n.text.includes("\n")||n.text.length>55)?`<span style="font-size:11px;color:rgba(255,255,255,0.3)">לחץ להרחבה…</span>`:""}
           ${exp===1?`<span style="font-size:11px;color:rgba(93,168,232,0.6)">לחץ שוב לכיווץ ↑</span>`:""}
+          ${exp===2?`<span style="font-size:11px;color:rgba(155,111,232,0.6)">לחץ לכיווץ ↑</span>`:""}
         </div>
       </div>`;
     }
   });
   return h;
 }
-function tapNote(id){const cur=S.noteExp[id]||0;S.noteExp={...S.noteExp,[id]:(cur+1)%3};setState({});}
+// מחזורי: 0=1 שורה, 1=4 שורות, 2=מלא, ואז חזרה ל-0
+function tapNote(id){
+  const cur=S.noteExp[id]||0;
+  S.noteExp={...S.noteExp,[id]:(cur+1)%3};
+  setState({});
+}
 function saveNpNoteFromForm(){S.npNoteText=document.getElementById("newNotepadTA")?.value||"";saveNpNote();}
 function saveEditNoteFromForm(){const v=document.getElementById("editNoteTA")?.value||"";if(!v.trim())return;S.npNotes=S.npNotes.map(n=>n.id===S.editNpNoteId?{...n,text:v.trim()}:n);setState({editNpNoteId:null,npNoteText:""});}
 
@@ -1016,38 +844,11 @@ function buildImgModal(){
   return`<div class="modal-bg" onclick="setState({viewingImg:null})" style="z-index:200"><img src="${src}" style="max-width:100%;max-height:82vh;border-radius:12px;object-fit:contain"/></div>`;
 }
 
-// מודל תוכנית AI
-function buildPlanModal(){
-  if(!S.showPlanModal)return"";
-  const options=["שבוע","חודש","3 חודשים","שנה"];
-  return`<div class="modal-bg" onclick="setState({showPlanModal:false})"><div class="modal" onclick="event.stopPropagation()">
-    <h3>📋 צור תוכנית עבודה</h3>
-    <div style="font-size:13px;color:rgba(255,255,255,0.6);margin-bottom:14px">לאיזה טווח זמן לתכנן?</div>
-    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
-      ${options.map(o=>`<button onclick="setState({planTimeframe:'${o}'})" style="width:100%;text-align:right;background:${S.planTimeframe===o?"rgba(76,175,125,0.3)":"rgba(255,255,255,0.07)"};border:1px solid ${S.planTimeframe===o?"rgba(76,175,125,0.5)":"rgba(255,255,255,0.1)"};border-radius:10px;color:#fff;padding:11px 14px;font-size:14px;cursor:pointer">${S.planTimeframe===o?"✓ ":""}${o}</button>`).join("")}
-    </div>
-    <div style="display:flex;gap:8px">
-      ${btn("צור תוכנית 🚀",`aiGetPlan('${S.aiGoalId}','${S.planTimeframe}')`, "rgba(76,175,125,0.4)","flex")}
-      ${btn("ביטול","setState({showPlanModal:false})")}
-    </div>
-  </div></div>`;
-}
-
-// כרטיס בוקר
-function buildMorningCard(){
-  if(!S.showMorningCard||!S.morningCardText)return"";
-  return`<div class="modal-bg" onclick="dismissMorningCard()"><div class="modal" onclick="event.stopPropagation()" style="background:linear-gradient(135deg,rgba(26,21,53,0.98),rgba(45,11,90,0.98));border:1px solid rgba(155,111,232,0.3)">
-    <div style="text-align:center;font-size:28px;margin-bottom:10px">☀️</div>
-    <div style="font-size:13px;font-weight:700;color:rgba(155,111,232,0.8);margin-bottom:12px;text-align:center">בוקר טוב מהמאמן שלך</div>
-    <div style="font-size:15px;line-height:1.8;color:#fff;white-space:pre-wrap">${S.morningCardText.replace(/</g,"&lt;")}</div>
-    <button onclick="dismissMorningCard()" style="width:100%;margin-top:16px;background:rgba(155,111,232,0.3);border:none;border-radius:10px;color:#fff;padding:11px;font-size:14px;cursor:pointer">תודה, בואו נעשה את זה! 💪</button>
-  </div></div>`;
-}
-
+// מסך מלא עם אפשרות עריכה
 function buildFullNote(){
-  let text="",title="",date="",isNp=S.fullNote.type==="np";
-  if(isNp){const n=S.npNotes.find(x=>x.id===S.fullNote.id);text=n?.text||"";date=n?.date||"";title="פתק";}
-  else{const n=S.data[S.activeCat]?.goals.find(g=>g.id===S.activeGoalId)?.notes.find(x=>x.id===S.fullNote.id);text=n?.text||"";title="הערה";}
+  let text="",title="",date="",noteId="",isNp=S.fullNote.type==="np";
+  if(isNp){const n=S.npNotes.find(x=>x.id===S.fullNote.id);text=n?.text||"";date=n?.date||"";title="פתק";noteId=n?.id||"";}
+  else{const n=S.data[S.activeCat]?.goals.find(g=>g.id===S.activeGoalId)?.notes.find(x=>x.id===S.fullNote.id);text=n?.text||"";title="הערה";noteId=n?.id||"";}
 
   let body="";
   if(S.fullNoteEditing){
@@ -1104,8 +905,6 @@ function render(){
   if(S.shareNoteId)modals+=buildShareModal();
   if(S.moveNoteId)modals+=buildMoveModal();
   if(S.viewingImg)modals+=buildImgModal();
-  if(S.showPlanModal)modals+=buildPlanModal();
-  if(S.showMorningCard)modals+=buildMorningCard();
 
   shell.innerHTML=buildHeader()+extras+`<div class="content" onclick="closeMenus(event)">${content}</div>`+buildFooter()+modals;
 
@@ -1114,7 +913,9 @@ function render(){
   if(S.view==="notepad"&&S.showSearch){const el=document.getElementById("searchInp");if(el){el.focus();}}
 }
 
-function renderContent(){if(S.view==="notepad"){const c=document.querySelector(".content");if(c)c.innerHTML=buildNotepad();}}
+function renderContent(){
+  if(S.view==="notepad"){const c=document.querySelector(".content");if(c)c.innerHTML=buildNotepad();}
+}
 function closeMenus(e){if(S.folderMenuOpen||S.npMenuOpen){setState({folderMenuOpen:false,npMenuOpen:false});}}
 
 // ══ FILE INPUTS ══
@@ -1124,8 +925,16 @@ function handleImageFile(file,bookId){
   r.onload=ev=>{compressImage(ev.target.result,compressed=>{S.bookImages={...S.bookImages,[bookId]:compressed};setState({});});};
   r.readAsDataURL(file);
 }
-document.getElementById("cameraInput").addEventListener("change",e=>{handleImageFile(e.target.files[0],S.pendingPhotoBookId);e.target.value="";});
-document.getElementById("galleryInput").addEventListener("change",e=>{handleImageFile(e.target.files[0],S.pendingPhotoBookId);e.target.value="";});
+
+document.getElementById("cameraInput").addEventListener("change",e=>{
+  handleImageFile(e.target.files[0],S.pendingPhotoBookId);
+  e.target.value="";
+});
+document.getElementById("galleryInput").addEventListener("change",e=>{
+  handleImageFile(e.target.files[0],S.pendingPhotoBookId);
+  e.target.value="";
+});
+
 document.getElementById("txtInput").addEventListener("change",e=>{
   const f=e.target.files[0];if(!f)return;
   const r=new FileReader();
@@ -1140,6 +949,7 @@ document.getElementById("txtInput").addEventListener("change",e=>{
   };
   r.readAsText(f,"utf-8");e.target.value="";
 });
+
 document.getElementById("fnpInput").addEventListener("change",e=>{
   const f=e.target.files[0];if(!f)return;
   const r=new FileReader();
@@ -1147,11 +957,19 @@ document.getElementById("fnpInput").addEventListener("change",e=>{
     const lines=ev.target.result.split("\n");
     const folderMap={},newFolders=[],newNotes=[];
     let curFolder="העלאה",curText="";
-    const ensureF=name=>{const ex=S.npFolders.find(x=>x.name===name)||newFolders.find(x=>x.name===name);if(ex){folderMap[name]=ex.id;return ex.id;}const id=uid();newFolders.push({id,name});folderMap[name]=id;return id;};
+    const ensureF=name=>{
+      const ex=S.npFolders.find(x=>x.name===name)||newFolders.find(x=>x.name===name);
+      if(ex){folderMap[name]=ex.id;return ex.id;}
+      const id=uid();newFolders.push({id,name});folderMap[name]=id;return id;
+    };
     lines.forEach(line=>{
-      if(/^\[.+\]$/.test(line.trim())||/^##\s+/.test(line.trim())){if(curText.trim())newNotes.push({id:uid(),folderId:ensureF(curFolder),text:curText.trim(),date:today(),star:false});curFolder=line.replace(/^\[|\]$/g,"").replace(/^##\s+/,"").trim()||"העלאה";curText="";}
-      else if(line.trim()==="---"){if(curText.trim())newNotes.push({id:uid(),folderId:ensureF(curFolder),text:curText.trim(),date:today(),star:false});curText="";}
-      else{curText+=line+"\n";}
+      if(/^\[.+\]$/.test(line.trim())||/^##\s+/.test(line.trim())){
+        if(curText.trim())newNotes.push({id:uid(),folderId:ensureF(curFolder),text:curText.trim(),date:today(),star:false});
+        curFolder=line.replace(/^\[|\]$/g,"").replace(/^##\s+/,"").trim()||"העלאה";curText="";
+      }else if(line.trim()==="---"){
+        if(curText.trim())newNotes.push({id:uid(),folderId:ensureF(curFolder),text:curText.trim(),date:today(),star:false});
+        curText="";
+      }else{curText+=line+"\n";}
     });
     if(curText.trim())newNotes.push({id:uid(),folderId:ensureF(curFolder),text:curText.trim(),date:today(),star:false});
     if(newFolders.length)S.npFolders=[...S.npFolders,...newFolders];
@@ -1161,6 +979,7 @@ document.getElementById("fnpInput").addEventListener("change",e=>{
   };
   r.readAsText(f,"utf-8");e.target.value="";
 });
+
 document.getElementById("backupInput").addEventListener("change",e=>{
   const f=e.target.files[0];if(!f)return;
   const r=new FileReader();
@@ -1171,10 +990,3 @@ document.getElementById("backupInput").addEventListener("change",e=>{
 // ══ INIT ══
 applyTheme();
 render();
-
-// כרטיס בוקר - מופיע פעם אחת ביום
-if(S.morningCardEnabled && S.aiEnabled && GEMINI_API_KEY!=="YOUR_API_KEY_HERE"){
-  if(S.morningCardDismissedDate!==today()){
-    setTimeout(()=>aiMorningCard(), 1500);
-  }
-}
